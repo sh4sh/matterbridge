@@ -157,3 +157,5 @@ require (
 //replace github.com/matrix-org/gomatrix => github.com/matterbridge/gomatrix v0.0.0-20220205235239-607eb9ee6419
 
 go 1.24.0
+
+replace github.com/xmppo/go-xmpp => github.com/sh4sh/go-xmpp v0.0.0-20260217211726-0f112ff7b61a
