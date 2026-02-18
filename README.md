@@ -1,8 +1,26 @@
 > [!NOTE]
-> This is a community-maintained fork [42wim/matterbridge](https://github.com/42wim/matterbridge), because
-> there is not a lot of activity upstream and lots of bugfixes were not merged.
+> This is a fork of the community-maintained [matterbridge-org/matterbridge](https://github.com/matterbridge-org/matterbridge).
+> We are intending to upstream our changes but in the meantime this is the version we are using personally.
 >
-> **Get involved now and [become a maintainer for your favorite network/protocol](https://github.com/matterbridge-org/community/issues/1)!**
+> ### Features
+>
+> **note to selves: update this list as feature branches come and go**
+>
+> - xmpp: [message replies](https://xmpp.org/extensions/xep-0461.html) ([#134](https://github.com/matterbridge-org/matterbridge/pull/134))
+> - clean up usernames in discord replies: ([#135](https://github.com/matterbridge-org/matterbridge/pull/135))
+
+> [!TIP] To resync with all the feature branches
+>
+> ```
+> git checkout master
+> git fetch upstream  # assuming upstream is https://github.com/matterbridge-org/matterbridge
+> git merge --no-ff upstream/master
+> # **note to selves: update this list as feature branches come and go**
+> git merge --no-ff xmpp-reply
+> git merge --no-ff discord-reply
+> git push
+> ```
+
 
 <div align="center">
 
