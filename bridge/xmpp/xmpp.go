@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/jpillora/backoff"
 	"github.com/matterbridge-org/matterbridge/bridge"
 	"github.com/matterbridge-org/matterbridge/bridge/config"
@@ -22,10 +23,12 @@ import (
 type Bxmpp struct {
 	*bridge.Config
 
-	startTime time.Time
-	xc        *xmpp.Client
-	xmppMap   map[string]string
-	connected bool
+	startTime    time.Time
+	xc           *xmpp.Client
+	xmppMap      map[string]string
+	connected    bool
+	stanzaIDs    *lru.Cache
+	replyHeaders *lru.Cache
 	sync.RWMutex
 
 	avatarAvailability map[string]bool
@@ -33,11 +36,22 @@ type Bxmpp struct {
 }
 
 func New(cfg *bridge.Config) bridge.Bridger {
+	stanzaIDs, err := lru.New(5000)
+	if err != nil {
+		cfg.Log.Fatalf("Could not create LRU cache: %v", err)
+	}
+	replyHeaders, err := lru.New(5000)
+	if err != nil {
+		cfg.Log.Fatalf("Could not create LRU cache: %v", err)
+	}
+
 	return &Bxmpp{
 		Config:             cfg,
 		xmppMap:            make(map[string]string),
 		avatarAvailability: make(map[string]bool),
 		avatarMap:          make(map[string]string),
+		stanzaIDs:          stanzaIDs,
+		replyHeaders:       replyHeaders,
 	}
 }
 
@@ -124,19 +138,27 @@ func (b *Bxmpp) Send(msg config.Message) (string, error) {
 		return "", nil
 	}
 
+	// XEP-0461: populate reply fields if this message is a reply.
+	var reply xmpp.Reply
+	if msg.ParentValid() {
+		if _reply, ok := b.replyHeaders.Get(msg.ParentID); ok {
+			reply = _reply.(xmpp.Reply)
+		}
+	}
+
 	// Post normal message.
 	b.Log.Debugf("=> Sending message %#v", msg)
+	// Generate a dummy ID because to avoid collision with other internal messages
+	msgID := xid.New().String()
 	if _, err := b.xc.Send(xmpp.Chat{
 		Type:   "groupchat",
 		Remote: msg.Channel + "@" + b.GetString("Muc"),
 		Text:   msg.Username + msg.Text,
+		ID:     msgID,
+		Reply:  reply,
 	}); err != nil {
 		return "", err
 	}
-
-	// Generate a dummy ID because to avoid collision with other internal messages
-	// However this does not provide proper Edits/Replies integration on XMPP side.
-	msgID := xid.New().String()
 	return msgID, nil
 }
 
@@ -300,6 +322,13 @@ func (b *Bxmpp) handleXMPP() error {
 			if v.Type == "groupchat" {
 				b.Log.Debugf("== Receiving %#v", v)
 
+				if v.StanzaID.ID != "" {
+					// Here the stanza-id has been set by the server and can be used to provide replies
+					// as explained in XEP-0461 https://xmpp.org/extensions/xep-0461.html#business-id
+					b.stanzaIDs.Add(v.StanzaID.ID, v.ID)
+					b.replyHeaders.Add(v.ID, xmpp.Reply{ID: v.StanzaID.ID, To: v.Remote})
+				}
+
 				// Skip invalid messages.
 				if b.skipMessage(v) {
 					continue
@@ -320,6 +349,28 @@ func (b *Bxmpp) handleXMPP() error {
 					avatar = getAvatar(b.avatarMap, v.Remote, b.General)
 				}
 
+				// If there was a <reply>, map the StanzaID to the local matterbridge message ID
+				// so we can inform the other bridges of this message has a parent
+				var parentID string
+				if v.Reply.ID != `` {
+					if _parentID, ok := b.stanzaIDs.Get(v.Reply.ID); ok {
+						parentID = _parentID.(string)
+					}
+
+					body := v.Text
+					if !b.GetBool("keepquotedreply") {
+						for strings.HasPrefix(body, "> ") {
+							lineIdx := strings.IndexRune(body, '\n')
+							if lineIdx == -1 {
+								body = ""
+							} else {
+								body = body[(lineIdx + 1):]
+							}
+						}
+					}
+					v.Text = body
+				}
+
 				rmsg := config.Message{
 					Username: b.parseNick(v.Remote),
 					Text:     v.Text,
@@ -327,10 +378,9 @@ func (b *Bxmpp) handleXMPP() error {
 					Account:  b.Account,
 					Avatar:   avatar,
 					UserID:   v.Remote,
-					// Here the stanza-id has been set by the server and can be used to provide replies
-					// as explained in XEP-0461 https://xmpp.org/extensions/xep-0461.html#business-id
-					ID:    v.StanzaID.ID,
-					Event: event,
+					ID:       v.ID,
+					Event:    event,
+					ParentID: parentID,
 				}
 
 				// Check if we have an action event.
